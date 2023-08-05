@@ -1,7 +1,8 @@
-package main
+package runner
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"os/signal"
@@ -9,23 +10,33 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/moqsien/sudo/utils"
 	"golang.org/x/sys/windows"
 )
 
-func spawnServer() {
-	srv, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+func StartServer() {
+	if SocketPath == "" {
+		log.Fatal("invalid socket path")
+		return
+	}
+	utils.CheckSocketFile(SocketPath)
+	srv, err := net.Listen("unix", SocketPath)
+
 	if err != nil {
 		fmt.Println("sudo: error: unable to spawn server")
 		return
 	}
+	defer func() {
+		os.RemoveAll(SocketPath)
+	}()
 	defer srv.Close()
 
 	verb := "runas"
 	exe, _ := os.Executable()
 	cwd, _ := os.Getwd()
 	args := "-client " + strings.Join(os.Args[1:], " ")
-	if !strings.Contains(args, fmt.Sprintf("%d", port)) {
-		args = fmt.Sprintf("-port %d %s", port, args)
+	if !strings.Contains(args, SocketPath) {
+		args = fmt.Sprintf("-socketfile %s %s", SocketPath, args)
 	}
 
 	verbPtr, _ := syscall.UTF16PtrFromString(verb)
@@ -48,13 +59,13 @@ func spawnServer() {
 	}
 
 	//Stdio buffers
-	input := make(chan []byte, bufSize)
-	output := make(chan []byte, bufSize)
+	input := make(chan []byte, BufSize)
+	output := make(chan []byte, BufSize)
 
 	//Syscall notifications for terminating child processes
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT)
-	signal.Notify(sc, syscall.SIGKILL)
+	signal.Notify(sc, syscall.SIGTERM)
 
 	go readInput(input)
 	go readOutput(output, conn)
@@ -83,7 +94,7 @@ func spawnServer() {
 				case opStderr:
 					os.Stderr.Write(msg.Data)
 				case opDebug:
-					if debug {
+					if Debug {
 						fmt.Printf("sudo: debug: %s\n", string(msg.Data))
 					}
 				default:
@@ -109,7 +120,7 @@ func spawnServer() {
 
 func readInput(input chan []byte) {
 	for {
-		in := make([]byte, bufSize)
+		in := make([]byte, BufSize)
 
 		n, err := os.Stdin.Read(in)
 		if err != nil {
@@ -123,9 +134,10 @@ func readInput(input chan []byte) {
 		}
 	}
 }
+
 func readOutput(output chan []byte, conn net.Conn) {
 	for {
-		out := make([]byte, buffer)
+		out := make([]byte, Buffer)
 
 		n, err := conn.Read(out)
 		if err != nil {

@@ -1,4 +1,4 @@
-package main
+package runner
 
 import (
 	"fmt"
@@ -8,18 +8,26 @@ import (
 	"os/exec"
 )
 
+func IsAdmin() bool {
+	if _, err := os.Open("C:\\Program Files\\WindowsApps"); err != nil {
+		return false
+	}
+	return true
+}
+
 type Client struct {
 	net.Conn
 }
+
 func (cli *Client) WriteMsg(msg *Msg) (n int, err error) {
 	if len(msg.Data) > 0 {
-		for i := int64(0); i < int64(len(msg.Data)); i += bufSize {
+		for i := int64(0); i < int64(len(msg.Data)); i += BufSize {
 			var data []byte
 
-			if i > int64(len(msg.Data)) - bufSize {
+			if i > int64(len(msg.Data))-BufSize {
 				data = msg.Data[i:]
 			} else {
-				data = msg.Data[i:i+bufSize]
+				data = msg.Data[i : i+BufSize]
 			}
 
 			written, writeErr := cli.Write(NewMsg(msg.Op, data).Bytes())
@@ -35,29 +43,31 @@ func (cli *Client) WriteMsg(msg *Msg) (n int, err error) {
 	return cli.Write(msg.Bytes())
 }
 func (cli *Client) Close() {
-	cli.WriteMsg(msgEOF)
-	cli.Close()
+	cli.WriteMsg(MsgEOF)
+	cli.Conn.Close()
 }
 
-func spawnClient() {
-	cli, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+func StartClient() {
+	// cli, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", Port))
+	cli, err := net.Dial("unix", SocketPath)
+
 	if err != nil {
-		logger.WriteString(fmt.Sprintf("sudo: error: unable to connect to server: %v\n", err))
+		Logger.WriteString(fmt.Sprintf("sudo: error: unable to connect to server: %v\n", err))
 		fmt.Println("sudo: error: unable to connect to server:", err)
 		return
 	}
 	client := &Client{cli}
 	defer client.Close()
 
-	if !isAdmin() {
+	if !IsAdmin() {
 		client.WriteMsg(NewMsgEF("no privileges"))
 		return
 	}
 
 	client.WriteMsg(NewMsgD("client: Creating cmd..."))
-	cmd := exec.Command(os.Args[argIndex])
-	if len(os.Args) > argIndex+1 {
-		cmd = exec.Command(os.Args[argIndex], os.Args[argIndex+1:]...)
+	cmd := exec.Command(os.Args[ArgIndex])
+	if len(os.Args) > ArgIndex+1 {
+		cmd = exec.Command(os.Args[ArgIndex], os.Args[ArgIndex+1:]...)
 	}
 
 	cmd.Dir, err = os.Getwd()
@@ -103,13 +113,13 @@ func spawnClient() {
 func cmdReadOutput(cmdOut io.ReadCloser, client *Client) {
 	defer cmdOut.Close()
 	for {
-		buf := make([]byte, bufSize)
+		buf := make([]byte, BufSize)
 
 		n, err := cmdOut.Read(buf)
 		if err != nil {
 			if err == io.EOF {
-				logger.WriteString("cmdReadOutput: EOF\n")
-				client.WriteMsg(msgEOF)
+				Logger.WriteString("cmdReadOutput: EOF\n")
+				client.WriteMsg(MsgEOF)
 			} else {
 				client.WriteMsg(NewMsgEF("cmdReadOutput: %v", err))
 			}
@@ -122,16 +132,17 @@ func cmdReadOutput(cmdOut io.ReadCloser, client *Client) {
 		}
 	}
 }
+
 func cmdReadError(cmdErr io.ReadCloser, client *Client) {
 	defer cmdErr.Close()
 	for {
-		buf := make([]byte, bufSize)
+		buf := make([]byte, BufSize)
 
 		n, err := cmdErr.Read(buf)
 		if err != nil {
 			if err == io.EOF {
-				logger.WriteString("cmdReadError: EOF\n")
-				client.WriteMsg(msgEOF)
+				Logger.WriteString("cmdReadError: EOF\n")
+				client.WriteMsg(MsgEOF)
 			} else {
 				client.WriteMsg(NewMsgEF("cmdReadError: %v", err))
 			}
@@ -144,10 +155,11 @@ func cmdReadError(cmdErr io.ReadCloser, client *Client) {
 		}
 	}
 }
+
 func cmdReadInput(cmdIn io.WriteCloser, client *Client) {
 	defer cmdIn.Close()
 	for {
-		buf := make([]byte, bufSize)
+		buf := make([]byte, BufSize)
 
 		n, err := client.Read(buf)
 		if err != nil {
